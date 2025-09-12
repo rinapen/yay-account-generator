@@ -3,14 +3,11 @@ const { v4: generateUUID } = require('uuid');
 const { HttpsProxyAgent } = require('https-proxy-agent');
 const APIClient = require('../APIClient');
 const { faker, fakerJA } = require('@faker-js/faker');
-const { getColor } = require('./color');
+const log = require('./log');
 
 const proxyUrl = process.env.PROXY_URL;
 const createAgent = () => proxyUrl ? new HttpsProxyAgent(proxyUrl) : undefined;
 const device_uuid = generateUUID();
-
-let aiToolsCount = 0;
-const MAX_AI_TOOLS_DEBUG = 5;
 
 const yayClient = new APIClient(
     process.env.YAY_API_HOST,
@@ -26,9 +23,10 @@ async function get_email_verification_urls(email) {
             locale: 'ja',
             device_uuid: yayClient.headers['X-Device-UUID'],
         }, createAgent());
+        log.success(`認証URL取得に成功。[${email}]`);
         return data.url;
     } catch (err) {
-        console.error(`[get_email_verification_urls]: Failed to get verification URL for ${email}:`, err);
+        log.error(`[get_email_verification_urls]: Failed for ${email}: ${err}`);
     }
 };
 
@@ -39,6 +37,7 @@ async function get_email_grant_tokens(email, code) {
         yayClient.headers['X-Device-UUID']
     );
     const data = await client.request('/apis/v1/apps/yay/email_grant_tokens', 'POST', { email, code });
+    log.success(`email_grant_token取得に成功。[${email}]`);
     return data.email_grant_token;
 };
 
@@ -51,21 +50,14 @@ async function post_email_verification_url(email_verification_url, email) {
             agent: createAgent()
         });
 
-        let data;
-        try {
-            data = await response.json();
-        } catch (jsonErr) {
-            console.error(`[post_email_verification_url]: Invalid JSON response for ${email}:`, jsonErr);
-            return;
-        }
-
+        const data = await response.json();
         if (data.status !== "success") {
-            console.log(`[post_email_verification_url]: Gmail verification failed for ${email}.`);
+            log.error(`[post_email_verification_url]: Gmail verification failed for ${email}.`);
         } else {
-            console.log(`${getColor("green")}[success]: ${getColor("white")}Gmail verification successful for ${email}.`);
+            log.success(`Gmail verification successful for ${email}.`);
         }
     } catch (err) {
-        console.error(`[post_email_verification_url]: Error while verifying email for ${email}:`, err);
+        log.error(`[post_email_verification_url]: Error for ${email}: ${err}`);
     }
 };
 
@@ -74,11 +66,7 @@ async function get_random_user_info() {
         const data = await yayClient.request('/v2/posts/timeline', "GET", null, createAgent());
         const randomIndex = Math.floor(Math.random() * Math.min(data.posts.length, 5));
         const user = data.posts[randomIndex].user;
-
-        if (user.profile_icon_thumbnail) {
-            console.log(user.profile_icon_thumbnail);
-        }
-
+        log.debug(user.profile_icon_thumbnail);
         return {
             nickname: user.nickname || getRandomJapaneseName(),
             biography: user.biography || '',
@@ -86,7 +74,7 @@ async function get_random_user_info() {
             profile_icon_thumbnail: user.profile_icon_thumbnail || '',
         };
     } catch (err) {
-        console.error(`[get_random_user_info]: Failed to get random user info:`, err);
+        log.error(`[get_random_user_info]: Failed: ${err}`);
     }
 }
 
@@ -96,20 +84,19 @@ function getRandomJapaneseName() {
 }
 
 async function register(email, password, email_grant_token) {
-    if (!email_grant_token) {
-        console.error(`[register]: Skipped account creation for ${email} due to missing email_grant_token.`);
-        return;
-    }
-
     try {
-        const random_user_info = await get_random_user_info();
-        if (!random_user_info) {
-            console.error(`[register]: Failed to get user info for ${email}.`);
+        if (!email_grant_token) {
+            log.warn(`[register]: email_grant_tokenが無効のためスキップ: ${email}`);
             return;
         }
 
-        const setting = `\n設定を開始します...\nユーザー名: [${random_user_info.nickname}]\n自己紹介: [${random_user_info.biography}]`;
-        console.log(setting);
+        const random_user_info = await get_random_user_info();
+        if (!random_user_info) {
+            log.error(`[register]: Failed to get user info for ${email}.`);
+            return;
+        }
+
+        log.info(`設定を開始します...\nユーザー名: [${random_user_info.nickname}]\n自己紹介: [${random_user_info.biography}]`);
 
         const profile_icon_filename = trim_url_prefix(random_user_info.profile_icon, "https://cdn.yay.space/uploads/");
         const uuid = yayClient.headers['X-Device-UUID'];
@@ -141,15 +128,14 @@ async function register(email, password, email_grant_token) {
         }, createAgent());
 
         if (response.result !== "success") {
-            console.log(`${getColor("red")}[error]: ${getColor("white")}Account creation failed for ${email}: ${response}`);
+            log.error(`Account creation failed for ${email}: ${JSON.stringify(response)}`);
         } else {
-            console.log(`${getColor("green")}[success]: ${getColor("white")}Account created successfully for ${email}.`);
+            log.success(`Account created successfully for ${email}.`);
         }
 
-        console.log('='.repeat(40));
         return response;
     } catch (err) {
-        console.error(`[register]: Error creating account for ${email}:`, err);
+        log.error(`[register]: Error creating account for ${email}: ${err}`);
     }
 };
 
@@ -185,20 +171,6 @@ function generate_signed_info(length = 32) {
     return Array.from({ length }, () => hexChars[Math.floor(Math.random() * hexChars.length)]).join('');
 };
 
-function logDebug(msg) {
-    if (msg === 'AI TOOLS') {
-        if (aiToolsCount < MAX_AI_TOOLS_DEBUG) {
-            console.debug(`[debug]: ${msg}`);
-            aiToolsCount++;
-        } else if (aiToolsCount === MAX_AI_TOOLS_DEBUG) {
-            console.debug(`[debug]: ${msg} (suppressed after 5 occurrences)`);
-            aiToolsCount++;
-        }
-    } else {
-        console.debug(`[debug]: ${msg}`);
-    }
-}
-
 module.exports = {
     generate_password,
     get_email_verification_urls,
@@ -206,5 +178,4 @@ module.exports = {
     get_email_grant_tokens,
     get_random_user_info,
     register,
-    logDebug
 };

@@ -3,3 +3,6 @@
 /tools
 *.json
 /user_json
+/index-gomi.js
+/celld
+/gomi
