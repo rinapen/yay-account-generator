@@ -29,7 +29,7 @@ class APIClient {
             }
             return await response.json();
         } catch (error) {
-            console.error(`Error during request to ${url}:`, error);
+            // console.error(`Error during request to ${url}:`, error);
             throw error;
         }
     }

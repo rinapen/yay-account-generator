@@ -136,6 +136,7 @@ async function get_random_user_info() {
                 biography: '',
                 profile_icon: '',
                 profile_icon_thumbnail: '',
+                timelinePosts: [] // BAN対策で使用するタイムライン情報（空の配列）
             };
         }
     }
@@ -159,7 +160,8 @@ async function get_random_user_info() {
                 biography: user.biography || '',
                 profile_icon: user.profile_icon || '',
                 profile_icon_thumbnail: user.profile_icon_thumbnail || '',
-                user_id: user.id // デバッグ用にIDも保存
+                user_id: user.id, // デバッグ用にIDも保存
+                timelinePosts: timelineCache // BAN対策で使用するタイムライン情報
             };
             
             log.debug(`Selected new user: ${userInfo.nickname} (ID: ${user.id})`);
@@ -183,6 +185,7 @@ async function get_random_user_info() {
         biography: '',
         profile_icon: '',
         profile_icon_thumbnail: '',
+        timelinePosts: timelineCache || [] // BAN対策で使用するタイムライン情報
     };
 }
 
@@ -248,7 +251,11 @@ async function register(email, password, email_grant_token, uuid) {
             log.success(`Account created successfully for ${email}.`);
         }
 
-        return response;
+        // BAN対策で使用するためにrandom_user_infoも含める
+        return {
+            ...response,
+            random_user_info: random_user_info
+        };
     });
 }
 

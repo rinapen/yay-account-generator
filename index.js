@@ -13,7 +13,28 @@ const {
   register,
   getUsedUserStats
 } = require("./utils/api-enhanced");
+
+const { copyUserPosts } = require("./utils/api");
 const { getColor } = require('./utils/color');
+
+// 日付ベースのフォルダ構造を作成する関数
+function createDateFolder() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = now.getMonth() + 1; // 0ベースなので+1
+  const day = now.getDate();
+  
+  // accounts/年/月/日/ の構造でフォルダを作成
+  const folderPath = path.join(__dirname, 'accounts', year.toString(), month.toString(), day.toString());
+  
+  // フォルダが存在しない場合は作成
+  if (!fs.existsSync(folderPath)) {
+    fs.mkdirSync(folderPath, { recursive: true });
+    console.log(`${getColor("cyan")}[FOLDER]${getColor("white")} フォルダ作成: ${folderPath}`);
+  }
+  
+  return folderPath;
+}
 
 // 保存先切り替え: "json" または "mongodb"
 const STORAGE_MODE = process.env.STORAGE_MODE || "json"; 
@@ -42,15 +63,67 @@ if (STORAGE_MODE === "mongodb") {
 const token = process.env.XSRF_TOKEN;
 const cookie = process.env.COOKIE;
 
+// 認証情報の初期化（自動生成対応）
+async function initializeCredentials() {
+  // 環境変数でトークンとクッキーが設定されている場合はそれを使用
+  if (token && cookie) {
+    console.log(`${getColor("green")}[INFO]${getColor("white")} 環境変数から認証情報を読み込みました`);
+    
+    // クッキーの基本的な形式チェック
+    if (!cookie.includes('=') || cookie.length < 10) {
+      console.log(`${getColor("red")}[CRITICAL]${getColor("white")} COOKIEの形式が無効です。`);
+      console.log(`${getColor("red")}[CRITICAL]${getColor("white")} 正しいクッキー形式を設定するか、自動生成を使用してください。`);
+      process.exit(1);
+    }
+    
+    return { token, cookie };
+  } else {
+    console.log(`${getColor("cyan")}[INFO]${getColor("white")} 環境変数に認証情報が設定されていません。自動生成を使用します。`);
+    return { token: null, cookie: null };
+  }
+}
+
+// クッキーの動的更新機能（将来の拡張用）
+function updateCookie(newCookie) {
+  if (newCookie && newCookie.includes('=') && newCookie.length > 10) {
+    process.env.COOKIE = newCookie;
+    console.log(`${getColor("green")}[INFO]${getColor("white")} クッキーが更新されました`);
+    return true;
+  }
+  console.log(`${getColor("red")}[ERROR]${getColor("white")} 無効なクッキー形式です`);
+  return false;
+}
+
+// 認証情報の有効性をテストする機能
+async function testCredentialsValidity(credentials) {
+  try {
+    const tempGmail = new TempGmail(credentials.token, credentials.cookie);
+    const testEmail = await tempGmail.generateGmail();
+    if (testEmail) {
+      console.log(`${getColor("green")}[INFO]${getColor("white")} 認証情報の有効性確認完了`);
+      return true;
+    }
+  } catch (error) {
+    console.log(`${getColor("red")}[ERROR]${getColor("white")} 認証情報の有効性確認失敗: ${error.message}`);
+  }
+  return false;
+}
+
 // パフォーマンス設定
 const PERFORMANCE_CONFIG = {
-  numAccountsToCreate: 70000,
-  maxConcurrentAccounts: 3, // 同時実行数を大幅に削減
-  batchSize: 10, // バッチ処理サイズを削減
-  retryAttempts: 3, // リトライ回数を増加
-  timeoutMs: 30000, // タイムアウト時間を延長
-  delayBetweenBatches: 5000, // バッチ間の遅延を増加
-  delayBetweenRequests: 2000, // リクエスト間の遅延を追加
+  numAccountsToCreate: 10000, // テスト用に少なく設定
+  maxConcurrentAccounts: 5, // レート制限対策で同時実行数を1に削減
+  batchSize: 50, // バッチ処理サイズを増加
+  retryAttempts: 2, // リトライ回数を2回に設定
+  timeoutMs: 30000, // タイムアウト時間を短縮（30秒）
+  delayBetweenBatches: 2000, // バッチ間の遅延を増加（レート制限対策）
+  delayBetweenRequests: 3000, // リクエスト間の遅延を3秒に増加（レート制限対策）
+};
+
+// BAN対策設定
+const BAN_PREVENTION_CONFIG = {
+  enablePosting: true, // BAN対策投稿を有効にする
+  maxPosts: 15, // コピーする投稿数
 };
 
 // 成功・失敗カウンター
@@ -58,9 +131,35 @@ let successCount = 0;
 let failureCount = 0;
 let startTime = Date.now();
 
+// レート制限管理
+let isRateLimited = false;
+let rateLimitEndTime = 0;
+
+// レート制限チェック関数
+async function waitForRateLimit() {
+  if (isRateLimited) {
+    const waitTime = rateLimitEndTime - Date.now();
+    if (waitTime > 0) {
+      console.log(`${getColor("yellow")}[RATE_LIMIT]${getColor("white")} グローバル待機中... 残り${Math.ceil(waitTime/1000)}秒`);
+      await new Promise(resolve => setTimeout(resolve, waitTime));
+    }
+    isRateLimited = false;
+  }
+}
+
+// レート制限を設定する関数
+function setRateLimit(seconds) {
+  isRateLimited = true;
+  rateLimitEndTime = Date.now() + (seconds * 1000) + 2000; // 少し余裕を持たせる
+  console.log(`${getColor("red")}[RATE_LIMIT]${getColor("white")} レート制限検知: ${seconds}秒 + 2秒の待機を設定`);
+}
+
 async function createAccount() {
   const { numAccountsToCreate, maxConcurrentAccounts, batchSize } = PERFORMANCE_CONFIG;
-  const outputPath = path.join(__dirname, "new_accounts.json");
+  
+  // 日付ベースのフォルダを作成
+  const dateFolder = createDateFolder();
+  const outputPath = path.join(dateFolder, "ACCOUNT.JSON");
 
   if (STORAGE_MODE === "json" && !fs.existsSync(outputPath)) {
     fs.writeFileSync(outputPath, JSON.stringify([]), "utf-8");
@@ -69,46 +168,57 @@ async function createAccount() {
   console.log(`${getColor("cyan")}[INFO]${getColor("white")} アカウント作成を開始します...`);
   console.log(`${getColor("cyan")}[INFO]${getColor("white")} 同時実行数: ${maxConcurrentAccounts}, バッチサイズ: ${batchSize}`);
 
-  // バッチ処理でアカウント作成
-  for (let batchStart = 0; batchStart < numAccountsToCreate; batchStart += batchSize) {
-    const batchEnd = Math.min(batchStart + batchSize, numAccountsToCreate);
-    const currentBatchSize = batchEnd - batchStart;
+  // 効率的な並列処理でアカウント作成
+  let completedCount = 0;
+  let runningTasks = 0;
+  
+  async function startTask() {
+    if (completedCount >= numAccountsToCreate) return;
     
-    console.log(`${getColor("yellow")}[BATCH]${getColor("white")} バッチ ${Math.floor(batchStart/batchSize) + 1}/${Math.ceil(numAccountsToCreate/batchSize)} (${currentBatchSize}個)`);
+    // レート制限チェック
+    await waitForRateLimit();
     
-    const batchPromises = [];
-    
-    for (let i = 0; i < currentBatchSize; i++) {
-      batchPromises.push(handleAccountCreationWithRetry(outputPath));
+    runningTasks++;
+    try {
+      await handleAccountCreationWithRetry(outputPath);
+    } catch (error) {
+      // レート制限エラーをチェック
+      if (error.message && error.message.includes('Rate limit exceeded')) {
+        const match = error.message.match(/Wait (\d+) seconds/);
+        if (match) {
+          setRateLimit(parseInt(match[1]));
+        }
+      }
+      // エラーが発生してもログは既に出力されているので継続
+    } finally {
+      runningTasks--;
+      completedCount++;
       
-      // リクエスト間の遅延を追加
-      if (i < currentBatchSize - 1) {
-        await new Promise(resolve => setTimeout(resolve, PERFORMANCE_CONFIG.delayBetweenRequests));
+      // 進捗表示
+      if (completedCount % 5 === 0 || completedCount === numAccountsToCreate) {
+        const elapsed = (Date.now() - startTime) / 1000;
+        const rate = successCount / elapsed;
+        const userStats = getUsedUserStats();
+        console.log(`${getColor("green")}[PROGRESS]${getColor("white")} 進行: ${completedCount}/${numAccountsToCreate}, 成功: ${successCount}, 失敗: ${failureCount}, 速度: ${rate.toFixed(2)}/秒`);
+        console.log(`${getColor("cyan")}[USERS]${getColor("white")} 使用済み: ${userStats.usedCount}, キャッシュ: ${userStats.cacheSize}件`);
       }
       
-      // 同時実行数制限
-      if (batchPromises.length >= maxConcurrentAccounts) {
-        await Promise.allSettled(batchPromises);
-        batchPromises.length = 0;
+      // 新しいタスクを開始（レート制限対策で遅延を追加）
+      if (completedCount < numAccountsToCreate) {
+        setTimeout(() => startTask(), PERFORMANCE_CONFIG.delayBetweenRequests);
       }
     }
-    
-    // 残りのプロミスを実行
-    if (batchPromises.length > 0) {
-      await Promise.allSettled(batchPromises);
-    }
-    
-    // バッチ間の遅延
-    if (batchEnd < numAccountsToCreate) {
-      await new Promise(resolve => setTimeout(resolve, PERFORMANCE_CONFIG.delayBetweenBatches));
-    }
-    
-    // 進捗表示
-    const elapsed = (Date.now() - startTime) / 1000;
-    const rate = successCount / elapsed;
-    const userStats = getUsedUserStats();
-    console.log(`${getColor("green")}[PROGRESS]${getColor("white")} 成功: ${successCount}, 失敗: ${failureCount}, 速度: ${rate.toFixed(2)}/秒`);
-    console.log(`${getColor("cyan")}[USERS]${getColor("white")} 使用済み: ${userStats.usedCount}, キャッシュ: ${userStats.cacheSize}件`);
+  }
+
+  // 初期タスクを開始
+  const initialTasks = Math.min(maxConcurrentAccounts, numAccountsToCreate);
+  for (let i = 0; i < initialTasks; i++) {
+    startTask();
+  }
+
+  // すべてのタスクの完了を待つ
+  while (completedCount < numAccountsToCreate || runningTasks > 0) {
+    await new Promise(resolve => setTimeout(resolve, 200));
   }
 
   const totalTime = (Date.now() - startTime) / 1000;
@@ -119,11 +229,15 @@ async function createAccount() {
 async function handleAccountCreationWithRetry(outputPath) {
   const { retryAttempts } = PERFORMANCE_CONFIG;
   
+  console.log(`${getColor("cyan")}[DEBUG]${getColor("white")} アカウント作成開始`);
+  
   for (let attempt = 1; attempt <= retryAttempts; attempt++) {
     try {
+      console.log(`${getColor("cyan")}[DEBUG]${getColor("white")} 試行 ${attempt}/${retryAttempts}`);
       const result = await handleAccountCreation(outputPath);
       if (result) {
         successCount++;
+        console.log(`${getColor("green")}[DEBUG]${getColor("white")} アカウント作成成功`);
         return result;
       }
     } catch (error) {
@@ -136,13 +250,14 @@ async function handleAccountCreationWithRetry(outputPath) {
       }
     }
   }
+  console.log(`${getColor("red")}[DEBUG]${getColor("white")} アカウント作成失敗`);
   return null;
 }
 
 async function handleAccountCreation(outputPath) {
   let email;
   try {
-    const tempGmail = new TempGmail(token, cookie);
+    const tempGmail = new TempGmail(); // 自動生成を使用
     email = await tempGmail.generateGmail();
     if (!email) throw new Error(`Gmailが生成されませんでした。`);
 
@@ -184,29 +299,53 @@ async function handleAccountCreation(outputPath) {
     console.log(`${getColor("green")}[SUCCESS]${getColor("white")} email_grant_token取得: [${email}]`);
 
     const password = generate_password();
-            const uuid = generateUUID();
+    const uuid = generateUUID();
     const accountData = await register(email, password, emailGrantToken, uuid);
 
     if (accountData && accountData.id) {
-      const { id, access_token, refresh_token } = accountData;
-            const account = {
-                email,
-                password,
+      const { id, access_token, refresh_token, random_user_info } = accountData;
+      const account = {
+        email,
+        password,
         user_id: id,
-                uuid,
+        uuid,
         access_token,
         refresh_token,
       };
 
       if (STORAGE_MODE === "json") {
+        // メインのACCOUNT.JSONに追加
         const existingData = JSON.parse(fs.readFileSync(outputPath, "utf-8"));
         existingData.push(account);
         fs.writeFileSync(outputPath, JSON.stringify(existingData, null, 2), "utf-8");
-        console.log(`${getColor("green")}[SUCCESS]${getColor("white")} JSON保存: ${email}`);
+        
+        console.log(`${getColor("green")}[SUCCESS]${getColor("white")} ACCOUNT.JSON保存: ${email}`);
       } else if (STORAGE_MODE === "mongodb") {
         const bot = new Bot(account);
         await bot.save();
         console.log(`${getColor("green")}[SUCCESS]${getColor("white")} MongoDB保存: ${email}`);
+      }
+      
+      // BAN対策: アカウント作成後に投稿をコピー
+      if (BAN_PREVENTION_CONFIG.enablePosting) {
+        try {
+          console.log(`${getColor("cyan")}[BAN_PREVENTION]${getColor("white")} BAN対策投稿を開始します...`);
+          
+          // 投稿をコピー（タイムライン情報を使用）
+          const timelinePosts = random_user_info?.timelinePosts || [];
+          await copyUserPosts(
+            timelinePosts,
+            access_token,
+            uuid,
+            BAN_PREVENTION_CONFIG.maxPosts,
+            { ...random_user_info, email } // アカウント作成時の情報とemailを渡す
+          );
+          
+          console.log(`${getColor("green")}[BAN_PREVENTION]${getColor("white")} BAN対策投稿完了: ${email}`);
+        } catch (banError) {
+          console.error(`${getColor("red")}[BAN_PREVENTION]${getColor("white")} BAN対策投稿に失敗: ${banError.message}`);
+          // BAN対策が失敗してもアカウント作成は成功として扱う
+        }
       }
       
       return account;
@@ -222,6 +361,9 @@ async function handleAccountCreation(outputPath) {
 // メイン実行
 (async () => {
     try {
+    // 認証情報の初期化
+    const credentials = await initializeCredentials();
+    
     await createAccount();
     } catch (error) {
     console.error(`${getColor("red")}[FATAL]${getColor("white")} ${error.message}`);
