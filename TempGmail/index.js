@@ -28,7 +28,6 @@ class TempGmail {
         this.autoGenerate = !token || !cookie;
     }
 
-    // トークンとクッキーを自動取得するメソッド
     async initializeCredentials() {
         if (this.autoGenerate) {
             try {
@@ -45,7 +44,6 @@ class TempGmail {
         return true;
     }
 
-    // 認証情報の有効性をチェックするメソッド
     async validateCredentials() {
         if (!this.token || !this.cookie) {
             return false;
@@ -55,13 +53,10 @@ class TempGmail {
 
     async generateGmail() {
         try {
-            // 認証情報の初期化（キャッシュから取得または新規生成）
             if (!await this.initializeCredentials()) {
                 throw new Error('認証情報の初期化に失敗しました');
             }
 
-            // キャッシュされたトークンを使用する場合は、バリデーションをスキップ
-            // （getTokenAndCookie内でキャッシュの有効期限をチェック済み）
 
             const url = `${this.domain}/generate-email`;
 
@@ -121,7 +116,7 @@ class TempGmail {
 
             let isSuccess = false;
             let attemptCount = 0;
-            const maxAttempts = 2; // 試行回数を2回に削減
+            const maxAttempts = 2;
 
             while (!isSuccess && attemptCount < maxAttempts) {
                 attemptCount++;
@@ -154,7 +149,7 @@ class TempGmail {
                 if (!isSuccess) {
                     if (attemptCount < maxAttempts) {
                         console.log(`${getColor("yellow")}[WARN]${getColor("white")} メール未受信 (${attemptCount}/${maxAttempts}) - 15秒後に再試行`);
-                        await delay(15000); // 待機時間を15秒に短縮
+                        await delay(15000);
                     } else {
                         console.log(`${getColor("yellow")}[TIMEOUT]${getColor("white")} メール受信タイムアウト (${maxAttempts}回試行) - スキップします`);
                         return false;
@@ -162,7 +157,6 @@ class TempGmail {
                 }
             }
             
-            // 成功した場合はtrueを返す
             if (isSuccess) {
                 return true;
             }

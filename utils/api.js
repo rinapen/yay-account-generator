@@ -403,7 +403,6 @@ async function editProfile(accessToken, nickname = null, biography = null, cover
     }
 }
 
-// 投稿可能なユーザーを動的に選択する関数
 async function selectValidUser(timelinePosts, accessToken, accountEmail = 'unknown') {
     try {
         log.info(`[${accountEmail}] タイムラインから1人のユーザーを確認します...`);
@@ -456,7 +455,6 @@ async function selectValidUser(timelinePosts, accessToken, accountEmail = 'unkno
     }
 }
 
-// タイムラインから文字投稿を抽出してコピーする関数（改良版）
 async function copyUserPosts(originalTimelinePosts, accessToken, deviceUuid, maxPosts = 15, accountUserInfo = null) {
     try {
         const accountEmail = accountUserInfo?.email || 'unknown';

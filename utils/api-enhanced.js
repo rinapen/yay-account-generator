@@ -9,7 +9,6 @@ const proxyUrl = process.env.PROXY_URL;
 const createAgent = () => proxyUrl ? new HttpsProxyAgent(proxyUrl) : undefined;
 const device_uuid = generateUUID();
 
-// パフォーマンス設定
 const API_CONFIG = {
   timeout: 15000,
   retryAttempts: 3,
@@ -17,11 +16,10 @@ const API_CONFIG = {
   maxConcurrent: 20,
   rateLimit: {
     requests: 50,
-    window: 60000 // 1分間
+    window: 60000
   }
 };
 
-// レート制限管理
 let requestCount = 0;
 let lastResetTime = Date.now();
 
@@ -31,7 +29,6 @@ const yayClient = new APIClient(
     device_uuid
 );
 
-// レート制限チェック
 function checkRateLimit() {
   const now = Date.now();
   if (now - lastResetTime >= API_CONFIG.rateLimit.window) {
@@ -47,7 +44,6 @@ function checkRateLimit() {
   requestCount++;
 }
 
-// リトライ機能付きAPI呼び出し
 async function retryApiCall(apiCall, maxRetries = API_CONFIG.retryAttempts) {
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
@@ -58,7 +54,6 @@ async function retryApiCall(apiCall, maxRetries = API_CONFIG.retryAttempts) {
         throw error;
       }
       
-      // 指数バックオフ
       const delay = API_CONFIG.retryDelay * Math.pow(2, attempt - 1);
       await new Promise(resolve => setTimeout(resolve, delay));
       
@@ -111,17 +106,15 @@ async function post_email_verification_url(email_verification_url, email) {
     });
 }
 
-// 使用済みユーザーIDの追跡
 let usedUserIds = new Set();
 let timelineCache = null;
 let cacheExpiry = 0;
-const CACHE_DURATION = 5 * 60 * 1000; // 5分
-const MAX_RETRIES = 10; // 最大リトライ回数
+const CACHE_DURATION = 5 * 60 * 1000;
+const MAX_RETRIES = 10;
 
 async function get_random_user_info() {
     const now = Date.now();
     
-    // キャッシュが有効でない場合は新しいタイムラインを取得
     if (!timelineCache || now >= cacheExpiry) {
         try {
             const data = await yayClient.request('/v2/posts/timeline', "GET", null, createAgent());
@@ -130,29 +123,24 @@ async function get_random_user_info() {
             log.debug(`Timeline cache updated: ${timelineCache.length} posts`);
         } catch (err) {
             log.error(`[get_random_user_info]: Failed to fetch timeline: ${err}`);
-            // エラーの場合はデフォルト値を返す
             return {
                 nickname: getRandomJapaneseName(),
                 biography: '',
                 profile_icon: '',
                 profile_icon_thumbnail: '',
-                timelinePosts: [] // BAN対策で使用するタイムライン情報（空の配列）
+                timelinePosts: []
             };
         }
     }
     
-    // 未使用のユーザーを探す
     let attempts = 0;
     while (attempts < MAX_RETRIES) {
         attempts++;
         
-        // タイムラインからランダムにユーザーを選択
         const randomIndex = Math.floor(Math.random() * timelineCache.length);
         const user = timelineCache[randomIndex].user;
         
-        // ユーザーIDが存在し、まだ使用されていないかチェック
         if (user && user.id && !usedUserIds.has(user.id)) {
-            // 使用済みユーザーIDに追加
             usedUserIds.add(user.id);
             
             const userInfo = {
@@ -160,15 +148,14 @@ async function get_random_user_info() {
                 biography: user.biography || '',
                 profile_icon: user.profile_icon || '',
                 profile_icon_thumbnail: user.profile_icon_thumbnail || '',
-                user_id: user.id, // デバッグ用にIDも保存
-                timelinePosts: timelineCache // BAN対策で使用するタイムライン情報
+                user_id: user.id,
+                timelinePosts: timelineCache
             };
             
             log.debug(`Selected new user: ${userInfo.nickname} (ID: ${user.id})`);
             return userInfo;
         }
         
-        // すべてのユーザーが使用済みの場合は、キャッシュをリセット
         if (attempts >= timelineCache.length) {
             log.warn(`All users in current timeline have been used. Resetting cache and used IDs.`);
             timelineCache = null;
@@ -178,18 +165,16 @@ async function get_random_user_info() {
         }
     }
     
-    // 最大リトライ回数に達した場合や、すべてのユーザーが使用済みの場合はデフォルト値を返す
     log.warn(`Could not find unused user after ${attempts} attempts. Using default values.`);
     return {
         nickname: getRandomJapaneseName(),
         biography: '',
         profile_icon: '',
         profile_icon_thumbnail: '',
-        timelinePosts: timelineCache || [] // BAN対策で使用するタイムライン情報
+        timelinePosts: timelineCache || []
     };
 }
 
-// 使用済みユーザーIDの統計を取得
 function getUsedUserStats() {
     return {
         usedCount: usedUserIds.size,
@@ -251,7 +236,6 @@ async function register(email, password, email_grant_token, uuid) {
             log.success(`Account created successfully for ${email}.`);
         }
 
-        // BAN対策で使用するためにrandom_user_infoも含める
         return {
             ...response,
             random_user_info: random_user_info
@@ -291,7 +275,6 @@ function generate_signed_info(length = 32) {
     return Array.from({ length }, () => hexChars[Math.floor(Math.random() * hexChars.length)]).join('');
 }
 
-// 統計情報
 function getStats() {
     return {
         requestCount,
